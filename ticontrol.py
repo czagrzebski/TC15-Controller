@@ -134,6 +134,7 @@ class ControlWorker(threading.Thread):
                 logging.warning('Control Worker failed to complete task in 30 seconds')
                 break
             if readserial.currentheight == 0:
+                logging.warning('Failed to Read Serial Port. Aborting...')
                 break
             elif readserial.currentheight == self.setheight:
                 logging.warning('Task Complete')
