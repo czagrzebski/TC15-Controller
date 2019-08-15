@@ -4,6 +4,14 @@ import zmq
 import threading
 import queue
 import logging
+import os
+app = Flask(__name__)
+ask = Ask(app, "/")
+logging.getLogger('flask_ask').setLevel(logging.DEBUG)
+
+STATUSON = ['stand','standing']
+STATUSOFF = ['sit','sitting']
+RESET = ['reset', 'fix']
 
 class deskclient(threading.Thread):
     def __init__(self, q, loop_time = 1.0/60):
@@ -52,8 +60,7 @@ class deskclient(threading.Thread):
                 self.socket.send(command)
                 message = self.socket.recv()
             except:
-                print('Failed To Complete')
-          
+                print('Failed To Complete')  
 
     def resetDesk(self):
         command = 'reset'
@@ -73,20 +80,6 @@ class deskclient(threading.Thread):
             except:
                 print('Failed To Complete')
 
-import logging
-import os
-
-
-
-
-
-app = Flask(__name__)
-ask = Ask(app, "/")
-logging.getLogger('flask_ask').setLevel(logging.DEBUG)
-
-STATUSON = ['stand','standing']
-STATUSOFF = ['sit','sitting']
-RESET = ['reset', 'fix']
 
 @ask.launch
 def launch():
