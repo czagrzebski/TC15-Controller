@@ -1,7 +1,8 @@
 """
 TiMotion Controller 
 
-Supports TC15 V1 Controller (Without PS Features)
+Supports TC15 V1 Controller
+Note: This version doesn't work with V2 TC15 Controller with Power Saving Features
 """
 import time
 import threading
@@ -11,37 +12,26 @@ import sys
 import serial
 import logging
 
-print("TiMotion Controller")
-time.sleep(1)
-
-
-if sys.platform == "win32":
-    logging.critical("Win32 is an unsupported Platform")
-    os.abort()
-os.system('clear')
-    
 class TICONTROL(object):
     def __init__(self):
         self.up = bytearray([0xD8, 0xD8, 0xff, 0x02, 0x02])
         self.down = bytearray([0xD8, 0xD8, 0xff, 0x01, 0x01])
         self.reset = bytearray([0xD8, 0xD8, 0xff, 0x03, 0x03])
-        try:
-            self.port = serial.Serial("/dev/ttyS0", baudrate=9600, timeout=1)
-        except:
-            logging.critical('Failed to initialize Serial Port')
-
-ticontrol = TICONTROL()
-
-class ReadSerial(threading.Thread):
-    def __init__(self):
+       
+class Serial(threading.Thread):
+    def __init__(self, port_id):
         threading.Thread.__init__(self)
         self.currentheight = int
         self.active = True
+        try:
+            self.port = serial.Serial(port_id, baudrate=9600, timeout=1)
+        except:
+            logging.critical('Failed to initialize Serial Port')
        
     def run(self):
         while self.active:
             try:
-                raw_input = ticontrol.port.read(13)
+                raw_input = self.port.read(13)
             except:
                 logging.warning('Cannot Read Serial Port!')
             toHex = lambda x: "".join("{:02X}".format(c) for c in x)
@@ -50,8 +40,6 @@ class ReadSerial(threading.Thread):
             listnow = list(seperate)
             self.currentheight = int(listnow[11], 16)
             time.sleep(.01)
-         
-readserial = ReadSerial()
 
 class ControlWorker(threading.Thread):
     def __init__(self, command):
@@ -62,131 +50,110 @@ class ControlWorker(threading.Thread):
     def run(self):
         if self.command == "reset":
             self.run_reset()
-            return
-        self.setheight = int(self.command)
-        if self.setheight == readserial.currentheight:
-            logging.warning('Desk is already at this height!')
-        #Calculate Offset
-        self.offset = readserial.currentheight - self.setheight
-        if -7 <= self.offset <= 0:
-            self.moveoffset("up", self.offset)
-        if 0 <= self.offset <= 7:
-            self.moveoffset("down", self.offset)
-        #Continue if not offset motion
-        if self.setheight < readserial.currentheight:
-            self.setheight = self.setheight + 5
-        if self.setheight > readserial.currentheight:
-            self.setheight = self.setheight - 5
-        self.move(self.setheight)        
+            return True
+        if self.command == "force_reset":
+            self.force_reset()
+            return True
+        try: 
+            self.setheight = int(self.command)
+        except Exception as E:
+            logging.critical("An error occurred while processing the given request {1}".format(E))
+        if self.setheight == serial.currentheight:
+            logging.warning("Requested height is already set")
+            return False
+        if self.hasOffset(self.setheight):
+            self.moveDeskWithOffset(self.offset)
+        else:
+            if self.setheight < serial.currentheight:
+                self.setheight = self.setheight + 5
+            if self.setheight > serial.currentheight:
+                serial.port.write(ticontrol.up)
+                self.setheight = self.setheight - 5
+            self.moveDesk(self.setheight)        
 
-    def moveoffset(self, direction, offset):
-        if direction == "up":
-            if offset == -1:
-                self.offseterror()
-            if offset == -2:
-                for x in range(1):
-                    ticontrol.port.write(ticontrol.up)
-                logging.warning('Offset Motion Complete')
-            if offset == -3:
-                self.offseterror()
-            if offset == -4:
-                for x in range(2):
-                    ticontrol.port.write(ticontrol.up)
-                    time.sleep(.5)
-                logging.warning('Offset Motion Complete')
-            if offset == -5:
-                self.offseterror()
-            if offset == -6:
-                for x in range(3):
-                    ticontrol.port.write(ticontrol.up)
-                    time.sleep(.5)
-                logging.warning('Offset Motion Complete')
-        if direction == "down":
-            if offset == 1:
-                self.offseterror()
-            if offset == 2:
-                for x in range(1):
-                    ticontrol.port.write(ticontrol.down)
-                logging.warning('Offset Motion Complete')
-            if offset == 3:
-                self.offseterror()
-            if offset == 4:
-                for x in range(2):
-                    ticontrol.port.write(ticontrol.down)
-                    time.sleep(.5)
-                logging.warning('Offset Motion Complete')
-            if offset == 5:
-                self.offseterror()
-            if offset == 6:
-                for x in range(3):
-                    ticontrol.port.write(ticontrol.down)
-                    time.sleep(.5)
-                logging.warning('Offset Motion Complete')
+    def hasOffset(self, setheight):
+        self.offset = serial.currentheight - setheight
+        if -7 <= self.offset <= 7:
+            return True
+        else:
+            return False
 
-    def offseterror(self):
-        logging.warning('Offset Error')
+    def moveDeskWithOffset(self, offset):
+        num_of_serial_writes = int(abs(self.offset/2))
+        if self.offset < 0:
+            if abs(self.offset) % 2 == 0:
+                for serial_write in range(num_of_serial_writes):            
+                    serial.port.write(ticontrol.up)
+            else:
+                logging.warning('Offset value does not meet criteria')
+        if self.offset > 0:
+            if self.offset > 0:
+                if abs(self.offset) % 2 != 0:
+                    for serial_write in range(num_of_serial_writes):
+                        serial.port.write(ticontrol.down)
+                else:
+                    logging.warning('Offset value does not meet criteria')
 
-    def move(self, setheight):
+    def moveDesk(self, setheight):
         time_started = time.time()
         seconds = 30
         while True:
             if time.time() > time_started + seconds:
                 logging.warning('Control Worker failed to complete task in 30 seconds')
                 break
-            if readserial.currentheight == 0:
+            if serial.currentheight == 0:
                 break
-            elif readserial.currentheight == self.setheight:
+            elif serial.currentheight == self.setheight:
                 logging.warning('Task Complete')
                 time.sleep(2)
                 break
             else:
-                if readserial.currentheight > self.setheight:
-                    ticontrol.port.write(ticontrol.down)
+                if serial.currentheight > self.setheight:
+                    serial.port.write(ticontrol.down)
                     time.sleep(.2)
-                if readserial.currentheight < self.setheight:
-                    ticontrol.port.write(ticontrol.up)
+                if serial.currentheight < self.setheight:
+                    serial.port.write(ticontrol.up)
                     time.sleep(.2)
 
     def run_reset(self):
+        """Resets the controller"""
         while True:
-                ticontrol.port.write(ticontrol.reset)
-                if readserial.currentheight == 255:
+                serial.port.write(ticontrol.reset)
+                if serial.currentheight == 255:
                     break 
         while True:
-            ticontrol.port.write(ticontrol.reset)
-            if 60 <= readserial.currentheight <= 70:
+            serial.port.write(ticontrol.reset)
+            if 60 <= serial.currentheight <= 70:
                        logging.warning('Desk reset successful')
                        break
 
     def force_reset(self):
-        x = 0
-        while True:
-                ticontrol.port.write(ticontrol.reset)
-                x += 1
-                if x == 30:
-                    break    
-
-controlworker = None
-
+        """Forces the controller to reset when not responding"""
+        numSerialResetWrites = 30
+        for serial_write in range(numSerialResetWrites):
+                    serial.port.write(ticontrol.reset)
+                    numSerialResetWrites += 1
+                   
 class Server():
+    """Request/Recieve Server. Sends commands to controller"""
     def __init__(self):
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.REP)
-        self.socket.bind("tcp://*:5500")
-        self.socket.setsockopt(zmq.LINGER, 0)
-        try: 
-            self.command = None
+        try:
+            self.context = zmq.Context()
+            self.socket = self.context.socket(zmq.REP)
+            self.socket.bind("tcp://*:5500")
+            self.socket.setsockopt(zmq.LINGER, 0)
         except:
             logging.warning("Failed to initialize socket")
             sys.exit()
 
     def listen(self):
+        logging.info('Controller Ready')
         while True:
             self.command = self.socket.recv()
-            print('Recieved Request:', (self.command))
+            logging.info('Recieved Request: {0}'.format(self.command))
             self.command = self.command.decode()
             if self.command == "height":
-                self.socket.send(str(readserial.currentheight).encode())
+                self.socket.send(str(serial.currentheight).encode())
                 return 
             if self.command == "reset":
                 self.socket.send(b"Resetting")
@@ -197,23 +164,33 @@ class Server():
             if 65 <= int(self.command) <= 130:
                 self.socket.send(b"Received")
                 try:  
-                    if controlworker.isAlive() is False:
-                        readserial.active = True
+                    if not controlworker.isAlive():
+                        serial.active = True
                         controlworker = ControlWorker(self.command) 
                         controlworker.setDaemon(True)
                         controlworker.start()
                     else:  
-                        logging.warning("Control Worker Busy")
+                        logging.warning("Control worker busy")
                 except Exception as error:
-                    readserial.active = True
+                    serial.active = True
                     controlworker = ControlWorker(self.command) 
                     controlworker.setDaemon(True)
                     controlworker.start()
             else:
-                self.socket.send(b"invalid_arg")
+                self.socket.send(b"invalid argument")
 
 if __name__ == '__main__':
-    readserial.setDaemon(True)
-    readserial.start()
-    server = Server()
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',datefmt='%Y-%m-%d %H:%M:%S')
+    serial = Serial("/dev/ttyS0")
+    ticontrol = TICONTROL()
+    controlworker = None
+    serial.setDaemon(True)
+    serial.start()
+    server=Server()
     server.listen()
+
+   
+
+
+			
+			
